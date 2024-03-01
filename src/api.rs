@@ -141,6 +141,12 @@ cfg_if! {
             use llm::InferenceFeedback::Halt;
             use llm::InferenceFeedback::Continue;
 
+            // Defines a closure that processes inference responses and decides whether to continue or halt.
+            // In Rust, a closure is an anonymous function that can capture variables from its environment.
+            // The reason its used here is to capture the `buf`, `sender`, and `runtime` variables from the outer function.
+            // Which is necessary because the closure will be called asynchronously and needs access to these variables.
+            // The reason we don't use a regular function is because it would require passing these variables as arguments, which is more cumbersome.
+            // And without a closure or async block, we wouldn't be able to use the `runtime` to send messages.
             // The `move` keyword captures the variables by value, making them part of the closure's environment.
             move |response| -> Result<llm::InferenceFeedback, Infallible> {
                 // In Rust, match is used for pattern matching, similar to a switch statement in JavaScript.
