@@ -1,0 +1,7 @@
+{
+    "recommendations": [
+        "dustypomerleau.rust-syntax",
+        "rust-lang.rust-analyzer",
+        "1yib.rust-bundle"
+    ]
+}

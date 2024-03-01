@@ -132,9 +132,9 @@ cfg_if! {
             sender: mpsc::Sender<String>, // A transmitter for sending String messages asynchronously.
             runtime: &'a mut Runtime // A mutable reference to the Tokio runtime.
         ) -> impl // In Rust, impl is a keyword that defines an implementation block for a trait or type. In this case, it's used to define a closure that implements the FnMut trait.
-
         // FnMut is a trait for mutable function pointers, allowing the closure to be called and modified. Without this trait, the closure would be immutable.
-        // The + sign indicates that the closure implements multiple traits, in this case FnMut and 'a, which is a lifetime specifier.
+        // A trait is similar to an interface in other languages, defining a set of methods that a type must implement.
+        // The + sign indicates that the closure implements multiple traits, in this case FnMut and 'a, which is a lifetime specifier analogous to a generic type.
         (FnMut(InferenceResponse) -> Result<llm::InferenceFeedback, Infallible>) +
             'a {
             // Importing specific feedback types for convenience.
@@ -215,7 +215,7 @@ cfg_if! {
             let (send_inference, mut receive_inference) = mpsc::channel(100);
 
             // Clones the model reference for use across threads, ensuring thread safety.
-            let mdl: Arc<Llama> = model.into_inner().clone();
+            let model_cloned: Arc<Llama> = model.into_inner().clone();
             // Wraps the session in an `Arc<Mutex>` for shared, thread-safe access.
             let sess = Arc::new(Mutex::new(session));
             let sess_cloned = sess.clone();
@@ -227,11 +227,10 @@ cfg_if! {
                 // let send_inference_cloned = send_inference.clone();
                 // Rustformers sessions need to stay on the same thread
                 // So we can't really rely on TOKIOOOOO
-                let model_cloned = mdl.clone();
                 // Spawns a separate thread for handling inference, to keep it on the same thread due to library limitations.
                 std::thread::spawn(move || {
                     // Sets up a new inference session with the cloned model.
-                    let mut session = setup_session(mdl);
+                    let mut session = setup_session(model_cloned.clone());
 
                     // Processes each new user message received, performing inference and sending results.
                     for new_user_message in receive_new_user_message {
