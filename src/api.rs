@@ -87,14 +87,14 @@ cfg_if! {
         ///
         /// # Returns
         /// Returns a new `InferenceSession` object, ready for performing inferences.
-        fn session_setup(model: Arc<Llama>) -> llm::InferenceSession {
+        fn setup_session(model: Arc<Llama>) -> llm::InferenceSession {
             // Static string representing the initial context for the AI conversation.
             let persona = "A chat between a human and an assistant.";
             // Formatted string representing a hypothetical initial exchange, not used further in this snippet.
             let _history = format!(
-                "{CHARACTER_NAME}:Hello - How may I help you today?\n\
+                "{ASSISTANT_NAME}:Hello - How may I help you today?\n\
                 {USER_NAME}:What is the capital of France?\n\
-                {CHARACTER_NAME}: is the capital of France.\n"
+                {ASSISTANT_NAME}: is the capital of France.\n"
             );
 
             // Starts a new session with the AI model, using default settings.
@@ -207,11 +207,14 @@ cfg_if! {
             actix_rt::spawn(async move {
                 // Sets up a standard synchronous channel for new user messages.
                 let (send_new_user_message, receive_new_user_message) = std::sync::mpsc::channel();
-
+                // let send_inference_cloned = send_inference.clone();
+                // Rustformers sessions need to stay on the same thread
+                // So we can't really rely on TOKIOOOOO
+                let model_cloned = mdl.clone();
                 // Spawns a separate thread for handling inference, to keep it on the same thread due to library limitations.
                 std::thread::spawn(move || {
                     // Sets up a new inference session with the cloned model.
-                    let mut inference_session = session_setup(mdl);
+                    let mut inference_session = setup_session(mdl);
 
                     // Processes each new user message received, performing inference and sending results.
                     for new_user_message in receive_new_user_message {
