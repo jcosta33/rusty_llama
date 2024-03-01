@@ -1,3 +1,4 @@
+#![allow(unused_doc_comments)] 
 pub mod app;
 pub mod api;
 pub mod model;
