@@ -1,8 +1,8 @@
 // The `use` statement in Rust is similar to `import` in JavaScript. It's used to bring libraries or modules into scope for use in the current file.
 use cfg_if::cfg_if;
 
-/// Uses a conditional compilation block to include code based on whether the "ssr" (server-side rendering) feature is enabled.
-/// In Rust, conditional compilation is managed at compile-time, allowing for more optimized builds depending on the features enabled.
+// Uses a conditional compilation block to include code based on whether the "ssr" (server-side rendering) feature is enabled.
+// In Rust, conditional compilation is managed at compile-time, allowing for more optimized builds depending on the features enabled.
 cfg_if! {
     // This checks if the "ssr" feature flag is enabled in the Cargo.toml file. If so, the enclosed code is compiled and included.
     if #[cfg(feature = "ssr")] {
@@ -17,7 +17,6 @@ cfg_if! {
         use actix_web::web; // Actix web framework's utilities for handling web requests.
         use std::sync::Arc; // A thread-safe way to share ownership of immutable data across threads.
         use llm::models::Llama; // A hypothetical data model from the `llm` crate.
-        use llm::KnownModel; // A trait indicating the model's capabilities.
         use actix_web::HttpRequest; // Represents client requests to the server.
         use actix_web::HttpResponse; // For constructing server responses to send back to clients.
         use actix_web::web::Payload; // The payload of a request, such as form data or JSON.
@@ -25,52 +24,62 @@ cfg_if! {
         use actix_ws::Message as Msg; // WebSocket message handling, with `as` renaming it for clarity.
         use futures::stream::StreamExt; // Extensions for working with asynchronous streams.
         use leptos::*; // Assuming `leptos` is a framework or utility library, importing everything from it.
+        use tokio::sync::mpsc;
+        use llm::{
+            KnownModel, // A trait indicating the model's capabilities.
+            InferenceSession,
+            InferenceRequest,
+            InferenceParameters,
+            InferenceFeedback,
+            InferenceResponse,
+            feed_prompt_callback,
+        };
+        use tokio::runtime::Runtime;
 
         /// Performs AI model inference based on a user's message and sends the result over a WebSocket connection.
         ///
         /// # Arguments
         /// * `model` - A shared, thread-safe reference to the AI model.
-        /// * `inference_session` - A mutable reference to the inference session, allowing the session to be updated.
+        /// * `session` - A mutable reference to the inference session, allowing the session to be updated.
         /// * `user_message` - The message from the user, wrapped in a `String`.
         /// * `tx` - The transmitter part of a channel for sending the inference result back to the client.
         ///
         /// # Returns
         /// This function returns a `Result` type, which is either `Ok(())` indicating success, or `Err(ServerFnError)` indicating an error occurred.
-        pub fn infer(
+        pub fn perform_inference(
             model: Arc<Llama>,
-            inference_session: &mut llm::InferenceSession,
+            session: &mut llm::InferenceSession,
             user_message: &String,
-            tx: tokio::sync::mpsc::Sender<String>
+            sender: mpsc::Sender<String>
         ) -> Result<(), ServerFnError> {
             // Bringing the Tokio runtime into scope specifically for this function. Required for running asynchronous tasks synchronously.
             use tokio::runtime::Runtime;
 
-            /// Creates a new Tokio runtime, panicking if this fails. A runtime is required for executing asynchronous code.
-            /// `expect` is a method that panics with the specified message if the called function returns an `Err`.
-            let mut runtime = Runtime::new().expect("issue creating tokio runtime");
+            // Creates a new Tokio runtime, panicking if this fails. A runtime is required for executing asynchronous code.
+            // `expect` is a method that panics with the specified message if the called function returns an `Err`.
+            let mut async_runtime = Runtime::new().expect("issue creating tokio runtime");
 
-            /// Performs the inference by calling the `infer` method on the session, passing in the model, a random number generator,
-            /// and the inference request constructed from the user's message.
-            /// `.unwrap_or_else(|e| panic!("{e}"))` will panic if the inference fails, providing the error message.
-            inference_session
+            // Performs the inference by calling the `infer` method on the session, passing in the model, a random number generator,
+            // and the inference request constructed from the user's message.
+            // `.unwrap_or_else(|e| panic!("{e}"))` will panic if the inference fails, providing the error message.
+            session
                 .infer(
                     model.as_ref(), // Converts `Arc<Llama>` into a standard reference `&Llama`, allowing the model to be used without taking ownership.
                     &mut rand::thread_rng(), // Creates a thread-local random number generator for the inference.
-                    &(llm::InferenceRequest {
-                        // Constructs the inference request, using `format!` to interpolate user and character names into the prompt.
+                    &(InferenceRequest { // Constructs the inference request, using `format!` to interpolate user and character names into the prompt.
                         prompt: format!("{USER_NAME}\n{user_message}\n{ASSISTANT_NAME}:")
                             .as_str() // Converts the formatted string into a string slice (`&str`).
                             .into(), // Converts the string slice into a type compatible with the inference request.
-                        parameters: &llm::InferenceParameters::default(), // Uses default parameters for the inference.
+                        parameters: &InferenceParameters::default(), // Uses default parameters for the inference.
                         play_back_previous_tokens: false, // Indicates whether to play back previous tokens during inference.
                         maximum_token_count: None, // No maximum token count is specified, allowing the model to decide.
                     }),
                     &mut Default::default(), // Uses a default empty state for any additional required state.
-                    inference_callback(
+                    process_inference_result(
                         String::from(USER_NAME),
                         &mut String::new(),
-                        tx,
-                        &mut runtime
+                        sender,
+                        &mut async_runtime
                     ) // The callback function to process inference results.
                 )
                 .unwrap_or_else(|e| panic!("{e}")); // Handles any potential errors from the inference process.
@@ -87,27 +96,18 @@ cfg_if! {
         ///
         /// # Returns
         /// Returns a new `InferenceSession` object, ready for performing inferences.
-        fn setup_session(model: Arc<Llama>) -> llm::InferenceSession {
-            // Static string representing the initial context for the AI conversation.
-            let persona = "A chat between a human and an assistant.";
-            // Formatted string representing a hypothetical initial exchange, not used further in this snippet.
-            let _history = format!(
-                "{ASSISTANT_NAME}:Hello - How may I help you today?\n\
-                {USER_NAME}:What is the capital of France?\n\
-                {ASSISTANT_NAME}: is the capital of France.\n"
-            );
-
+        fn setup_session(model: Arc<Llama>) -> InferenceSession {
             // Starts a new session with the AI model, using default settings.
             let mut session = model.start_session(Default::default());
             // Feeds the initial prompt or context into the session, preparing it for further inferences.
             session
                 .feed_prompt(
                     model.as_ref(), // As before, converts `Arc<Llama>` to `&Llama`.
-                    format!("{persona}").as_str(), // Uses the `persona` variable as the initial prompt.
+                    "A chat between a human and an assistant.",
                     &mut Default::default(), // Uses default settings for any additional state.
-                    llm::feed_prompt_callback(|_| {
+                    feed_prompt_callback(|_| {
                         // Defines a callback for handling the AI's response to the initial prompt.
-                        Ok::<llm::InferenceFeedback, Infallible>(llm::InferenceFeedback::Continue)
+                        Ok::<InferenceFeedback, Infallible>(InferenceFeedback::Continue)
                         // Indicates that the session should continue after receiving the initial response.
                     })
                 )
@@ -121,53 +121,70 @@ cfg_if! {
         /// # Arguments
         /// * `stop_sequence` - A specific string sequence indicating when to stop the inference.
         /// * `buf` - A buffer for accumulating tokens from the inference response.
-        /// * `tx` - A transmitter for sending messages over a channel.
+        /// * `sender` - A transmitter for sending messages over a channel.
         /// * `runtime` - The Tokio runtime for executing asynchronous tasks.
         ///
         /// # Returns
         /// A closure that processes inference responses and decides whether to continue or halt.
-        fn inference_callback<'a>(
+        fn process_inference_result<'a>(
             stop_sequence: String, // Takes ownership of the stop sequence.
             buf: &'a mut String, // A mutable reference to a buffer string, allowing modification.
-            tx: tokio::sync::mpsc::Sender<String>, // A transmitter for sending String messages asynchronously.
-            runtime: &'a mut tokio::runtime::Runtime // A mutable reference to the Tokio runtime.
-        ) -> impl (FnMut(llm::InferenceResponse) -> Result<llm::InferenceFeedback, Infallible>) +
+            sender: mpsc::Sender<String>, // A transmitter for sending String messages asynchronously.
+            runtime: &'a mut Runtime // A mutable reference to the Tokio runtime.
+        ) -> impl // In Rust, impl is a keyword that defines an implementation block for a trait or type. In this case, it's used to define a closure that implements the FnMut trait.
+
+        // FnMut is a trait for mutable function pointers, allowing the closure to be called and modified. Without this trait, the closure would be immutable.
+        // The + sign indicates that the closure implements multiple traits, in this case FnMut and 'a, which is a lifetime specifier.
+        (FnMut(InferenceResponse) -> Result<llm::InferenceFeedback, Infallible>) +
             'a {
             // Importing specific feedback types for convenience.
             use llm::InferenceFeedback::Halt;
             use llm::InferenceFeedback::Continue;
 
             // The `move` keyword captures the variables by value, making them part of the closure's environment.
-            move |resp| -> Result<llm::InferenceFeedback, Infallible> {
-                match resp {
-                    // Matches on the type of inference response received.
-                    llm::InferenceResponse::InferredToken(t) => {
+            move |response| -> Result<llm::InferenceFeedback, Infallible> {
+                // In Rust, match is used for pattern matching, similar to a switch statement in JavaScript.
+                match response {
+                    // Matches on the type of inference response received. If it's an inferred token, it processes the token.
+                    InferenceResponse::InferredToken(token) => {
                         // Cloning `buf` to create a temporary string for comparison without altering `buf`.
-                        let mut reverse_buf = buf.clone();
-                        reverse_buf.push_str(t.as_str()); // Appends the new token to the temporary string.
-                        if stop_sequence.as_str().eq(reverse_buf.as_str()) {
+                        // A buffer is used to accumulate tokens until the stop sequence is reached.
+                        // This is necessary because the AI model may return tokens in multiple responses.
+                        // We use clone here to avoid moving the buffer, which would invalidate the reference.
+                        let mut temp_buffer = buf.clone();
+                        temp_buffer.push_str(token.as_str()); // Appends the new token to the temporary string.
+                        if stop_sequence.as_str().eq(temp_buffer.as_str()) {
                             // If the stop sequence matches exactly, clear the buffer and halt.
+                            // With the buffer clear, the next token will be sent as a new message.
                             buf.clear();
                             return Ok(Halt);
-                        } else if stop_sequence.as_str().starts_with(reverse_buf.as_str()) {
+                        } else if
                             // If the stop sequence starts with the temporary buffer, append the token to `buf`.
-                            buf.push_str(t.as_str());
+                            // We do this to accumulate tokens until the stop sequence is reached.
+                            stop_sequence.starts_with(temp_buffer.as_str())
+                        {
+                            // t is a token, so we can safely unwrap it here.
+                            buf.push_str(token.as_str());
                             return Ok(Continue);
                         }
 
                         // Prepares the message to send, based on whether `buf` is empty.
-                        let text_to_send = if buf.is_empty() { t.clone() } else { reverse_buf };
+                        // In Rust we can use the `if` expression to return different values based on a condition.
+                        let text_to_send = if buf.is_empty() { token.clone() } else { temp_buffer };
 
                         // Clones the transmitter to allow sending from within the async block.
-                        let tx_cloned = tx.clone();
+                        let sender_cloned = sender.clone();
                         // Executes an async block using the runtime, sending the message.
-                        runtime.block_on(async move {
-                            tx_cloned.send(text_to_send).await.expect("issue sending on channel");
+                        runtime.block_on(async {
+                            sender_cloned
+                                .send(text_to_send).await
+                                .expect("issue sending on channel");
                         });
 
                         Ok(Continue) // Continues the inference process.
                     }
-                    llm::InferenceResponse::EotToken => Ok(Halt), // Halts on an End of Transmission token.
+                    // If the response is an end of transmission token, it halts the inference process.
+                    InferenceResponse::EotToken => Ok(Halt), // Halts on an End of Transmission token.
                     _ => Ok(Continue), // Continues for any other response type.
                 }
             }
@@ -214,13 +231,13 @@ cfg_if! {
                 // Spawns a separate thread for handling inference, to keep it on the same thread due to library limitations.
                 std::thread::spawn(move || {
                     // Sets up a new inference session with the cloned model.
-                    let mut inference_session = setup_session(mdl);
+                    let mut session = setup_session(mdl);
 
                     // Processes each new user message received, performing inference and sending results.
                     for new_user_message in receive_new_user_message {
-                        let _ = infer(
+                        let _ = perform_inference(
                             model_cloned.clone(),
-                            &mut inference_session,
+                            &mut session,
                             &new_user_message,
                             send_inference.clone()
                         );
